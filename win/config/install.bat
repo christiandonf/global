@@ -2,6 +2,8 @@
 
 cd C:\OEM
 
+call config.bat
+
 SET "PB_PATH=%TEMP%\ProgressNotifier.exe"
 SET "INSTALLER=%TEMP%\python-3.12.0-amd64.exe"
 
@@ -21,13 +23,6 @@ SETX PATH "%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Pyth
 
 taskkill /im "ProgressNotifier.exe" /f >NUL 2>&1
 
-setlocal enabledelayedexpansion
-
-for /f "tokens=1,2 delims==" %%a in (".env") do (
-    set "name=%%a"
-    set "value=%%b"
-    set "!name!=!value!"
-)
 set minhaPasta = Audit-DAFF.zip
 
 curl  -L ^
