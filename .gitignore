@@ -1,13 +1,12 @@
 .env
-/promtail/
-/prometheus/
 /pihole/
 /nginx/others/
 /nginx/config/others
-/loki/
+/loki/data
 /logs/
 /config/
 /certbot/
 /authentik/
 /jellyfin/
-/win/
+/win/data*
+/win/windows.*

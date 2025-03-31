@@ -1,0 +1,43 @@
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: nginx
+    pipeline_stages:
+      - replace:
+          expression: '(?:[0-9]{1,3}\.){3}([0-9]{1,3})'
+          replace: '***'
+    static_configs:
+      - targets:
+          - nginx
+        labels:
+          job: global_logs
+          host: appfelstrudel
+          agent: promtail
+          __path__: /var/log/nginx/json_access.log
+
+
+  - job_name: nginx_webapi_access
+    pipeline_stages:
+      - replace:
+          expression: '(?:[0-9]{1,3}\.){3}([0-9]{1,3})'
+          replace: '***'
+    static_configs:
+      - targets:
+          - nginx
+        labels:
+          job: nginx-webapi
+          __path__: /var/log/nginx/webapi/json_access.log  
+
+
+  - job_name: nginx_jellyfin_access
+    pipeline_stages:
+      - replace:
+          expression: '(?:[0-9]{1,3}\.){3}([0-9]{1,3})'
+          replace: '***'
+    static_configs:
+      - targets:
+          - nginx
+        labels:
+          job: nginx-jellyfin
+          __path__: /var/log/nginx/jellyfin/json_access.log  
