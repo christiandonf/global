@@ -112,8 +112,8 @@ services:
       GF_AUTH_GENERIC_OAUTH_ENABLED: true
       GF_AUTH_GENERIC_OAUTH_TLS_SKIP_VERIFY_INSECURE: true
       GF_AUTH_GENERIC_OAUTH_NAME: authentik
-      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${ GF_AUTH_GENERIC_OAUTH_CLIENT_ID }
-      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${ GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET }
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: $${ GF_AUTH_GENERIC_OAUTH_CLIENT_ID }
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: $${ GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET }
       GF_AUTH_GENERIC_OAUTH_SCOPES: "openid profile email"
       GF_AUTH_GENERIC_OAUTH_AUTH_URL: https://authentik.nexuswebdigital.com/application/o/authorize/
       GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://authentikServer:9000/application/o/token/
@@ -492,7 +492,7 @@ services:
     networks:
       - nginx-connection
     restart: unless-stopped
-    # command: nvidia-smi
+    command: setx token ${token} /m
     deploy:
       resources:
         # reservations:

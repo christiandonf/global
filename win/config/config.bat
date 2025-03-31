@@ -8,7 +8,7 @@ set minhaPasta = Audit-DAFF.zip
 
 curl  -L ^
       -H "Accept: aaplication/vnd.github+json" ^
-      -H "Authorization: Bearer " ^
+      -H "Authorization: Bearer %token%" ^
       -H "X-Github-Api-Version: 2022-11-28" ^
       -o Audit-DAFF.zip ^
       "https://api.github.com/repos/vj-bots/Audit-DAFF/zipball/main!"
