@@ -9,3 +9,5 @@
 /config/
 /certbot/
 /authentik/
+/jellyfin/
+/win/
