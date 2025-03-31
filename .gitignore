@@ -10,3 +10,5 @@
 /jellyfin/
 /win/data*
 /win/windows.*
+/win/tmp
+/win/*.iso

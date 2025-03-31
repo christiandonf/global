@@ -482,7 +482,6 @@ services:
       - /dev/kvm
       - /dev/net/tun
     volumes:
-      - ./win:/storage
       - ./win/config:/oem
     cap_add:
       - NET_ADMIN
@@ -492,7 +491,6 @@ services:
     networks:
       - nginx-connection
     restart: unless-stopped
-    command: setx token ${token} /m
     deploy:
       resources:
         # reservations:
