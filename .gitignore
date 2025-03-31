@@ -1,0 +1,11 @@
+.env
+/promtail/
+/prometheus/
+/pihole/
+/nginx/others/
+/nginx/config/others
+/loki/
+/logs/
+/config/
+/certbot/
+/authentik/

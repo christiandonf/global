@@ -1,0 +1,384 @@
+#*##############################################################################
+#*                               Volumes
+#*##############################################################################
+
+volumes:
+  globalDatabase-data:
+  redis-data:
+  grafana-data:
+  loki-data:
+  loki-config:
+
+#*##############################################################################
+#*                               NETWORKS
+#*##############################################################################
+
+networks:
+  nginx-connection:
+    external: true
+  database-net:
+    external: true
+  monitoring-net:
+    external: true
+
+#*##############################################################################
+#*                                SERVICES
+#*##############################################################################
+
+services:
+  # * ---------------------------------------------------------------------------
+  # * LOAD-BALANCER (NGINX)
+  # * ---------------------------------------------------------------------------
+
+  loadbalancer:
+    image: nginx:1.26.2-alpine
+    container_name: nginx
+    volumes:
+      - ./nginx/config:/etc/nginx
+      - ./nginx/others/geoip:/etc/nginx/others
+      - ./logs/nginx:/var/log/nginx
+      - ./certbot/www/:/var/www/certbot/
+      - ./certbot/conf/:/etc/letsencrypt/
+    ports:
+      - 443:443
+    networks:
+      - monitoring-net
+      - nginx-connection
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: 2
+          memory: 128M
+    cpuset: 7-8
+
+  # * ---------------------------------------------------------------------------
+  # * CERTBOT
+  # * ---------------------------------------------------------------------------
+
+  sslbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - ./certbot/www/:/var/www/certbot/
+      - ./certbot/conf/:/etc/letsencrypt/
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 32M
+    cpuset: "19"
+
+  # * ---------------------------------------------------------------------------
+  # * PROMETHEUS
+  # * ---------------------------------------------------------------------------
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - "./prometheus:/etc/prometheus"
+    expose:
+      - 9090
+    networks:
+      - monitoring-net
+      - nginx-connection
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 512M
+    cpuset: "18"
+    restart: unless-stopped
+
+  # * ---------------------------------------------------------------------------
+  # * GRAFANA
+  # * ---------------------------------------------------------------------------
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    expose:
+      - 3008
+    restart: unless-stopped
+    environment:
+      GF_SERVER_ROOT_URL: https://grafana.nexuswebdigital.com
+      GF_SERVER_HTTP_PORT: 3008
+      GF_AUTH_GENERIC_OAUTH_ENABLED: true
+      GF_AUTH_GENERIC_OAUTH_TLS_SKIP_VERIFY_INSECURE: true
+      GF_AUTH_GENERIC_OAUTH_NAME: authentik
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${ GF_AUTH_GENERIC_OAUTH_CLIENT_ID }
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${ GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET }
+      GF_AUTH_GENERIC_OAUTH_SCOPES: "openid profile email"
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: https://authentik.nexuswebdigital.com/application/o/authorize/
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://authentikServer:9000/application/o/token/
+      GF_AUTH_GENERIC_OAUTH_API_URL: http://authentikServer:9000/application/o/userinfo/
+      GF_AUTH_SIGNOUT_REDIRECT_URL: https://authentik.nexuswebdigital.com/application/o/grafana1/end-session/
+      GF_AUTH_OAUTH_AUTO_LOGIN: true
+      # ? user groups to Grafana roles
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(groups, 'authentik Admins') && 'Admin' || 'Viewer'" # || contains(groups, 'Grafana Editors') && 'Editor'
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitoring-net
+      - nginx-connection
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 512M
+    cpuset: "19"
+
+  # * ---------------------------------------------------------------------------
+  # * Global Database
+  # * ---------------------------------------------------------------------------
+
+  globalDatabase:
+    image: docker.io/library/postgres:16-alpine
+    container_name: globalDatabase
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    volumes:
+      - globalDatabase-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+    networks:
+      - database-net
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 64M
+    cpuset: "17"
+
+  # * ---------------------------------------------------------------------------
+  # * Redis
+  # * ---------------------------------------------------------------------------
+
+  redis:
+    image: docker.io/library/redis:alpine
+    container_name: redis
+    command: --save 60 1 --loglevel warning
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+    volumes:
+      - redis-data:/data
+    networks:
+      - database-net
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 16M
+    cpuset: "19"
+
+  # * ---------------------------------------------------------------------------
+  # * Authentik
+  # * ---------------------------------------------------------------------------
+
+  authentikServer:
+    image: ghcr.io/goauthentik/server:2024.12.2
+    container_name: authentikServer
+    restart: unless-stopped
+    command: server
+    user: 65534:65534
+    environment:
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: globalDatabase
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: true
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+    expose:
+      - 9000
+      - 9443
+    volumes:
+      - ./authentik/media:/media
+      - ./authentik/custom-templates:/templates
+    networks:
+      - nginx-connection
+      - database-net
+    depends_on:
+      globalDatabase:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 1G
+    cpuset: "16"
+
+  authentikWorker:
+    image: ghcr.io/goauthentik/server:2024.12.2
+    container_name: authentikWorker
+    restart: unless-stopped
+    user: 65534:65534
+    command: worker
+    environment:
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: globalDatabase
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./authentik/media:/media
+      - ./authentik/certs:/certs
+      - ./authentik/custom-templates:/templates
+    networks:
+      - database-net
+    depends_on:
+      globalDatabase:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 1G
+    cpuset: "16"
+
+  # * ---------------------------------------------------------------------------
+  # *  Pihole
+  # * ---------------------------------------------------------------------------
+
+  dns:
+    image: pihole/pihole:nightly
+    container_name: pihole
+    hostname: pihole
+    ports:
+      - 53:53/udp
+      - 53:53/tcp
+    expose:
+      - "80"
+    restart: unless-stopped
+    environment:
+      PIHOLE_UID: 65534
+      PIHOLE_GID: 65534
+      tz: America/Sao_Paulo
+      FTLCONF_webserver_api_password: ${FTLCONF_webserver_api_password}
+      FTLCONF_dns_listeningMode: "all"
+    volumes:
+      - ./pihole/etc-pihole:/etc/pihole
+      - ./pihole/etc-dnsmasq.d:/etc/dnsmasq.d
+    networks:
+      - nginx-connection
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 256M
+    cpuset: "16"
+
+  # * ---------------------------------------------------------------------------
+  # *  Loki
+  # * ---------------------------------------------------------------------------
+
+  loki:
+    image: grafana/loki:3.2.1
+    container_name: loki
+    expose:
+      - 3100
+    volumes:
+      - loki-config:/etc/loki
+      - loki-data:/loki
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 128M
+    cpuset: "18"
+
+  # * ---------------------------------------------------------------------------
+  # *  Promtail
+  # * ---------------------------------------------------------------------------
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    container_name: promtail
+    volumes:
+      - ./promtail/config:/etc/promtail
+      - ./logs:/var/log
+    command: -config.file=/etc/promtail/config.yml
+    restart: unless-stopped
+    networks:
+      - monitoring-net
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 32M
+    cpuset: "19"
+
+  # * ---------------------------------------------------------------------------
+  # *  Cadvisor
+  # * ---------------------------------------------------------------------------
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    expose:
+      - 8080
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    restart: unless-stopped
+    networks:
+      - monitoring-net
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 128M
+    cpuset: "15"
+
+  # * ---------------------------------------------------------------------------
+  # *  node-exporter
+  # * ---------------------------------------------------------------------------
+
+  nodeExporter:
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: nodeExporter
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    expose:
+      - 9100
+    restart: unless-stopped
+    volumes:
+      - "/:/host:ro,rslave"
+    networks:
+      - monitoring-net
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 16M
+    cpuset: "18"
