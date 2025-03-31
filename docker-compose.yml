@@ -473,8 +473,8 @@ services:
       VERSION: "10"
       CPU_CORES: "6"
       RAM_SIZE: "4G"
-      USERNAME: "bill"
-      PASSWORD: "gates"
+      USERNAME: ${WIN_USERNAME}
+      PASSWORD: ${WIN_PASSWORD}
       LANGUAGE: "Portuguese"
       REGION: "pt-BR"
       KEYBOARD: "pt-BR"
@@ -483,7 +483,6 @@ services:
       - /dev/net/tun
     volumes:
       - ./win:/storage
-      - ./win/data:/data
       - ./win/config:/oem
     cap_add:
       - NET_ADMIN
@@ -493,7 +492,7 @@ services:
     networks:
       - nginx-connection
     restart: unless-stopped
-    command: nvidia-smi
+    # command: nvidia-smi
     deploy:
       resources:
         # reservations:
