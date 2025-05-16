@@ -9,6 +9,7 @@ volumes:
   loki-data:
   loki-config:
   postgres-data:
+  portainer_data:
 
 #*##############################################################################
 #*                               NETWORKS
@@ -23,6 +24,15 @@ networks:
     external: true
   chat-ui:
     external: true
+  vlan:
+    driver: macvlan
+    driver_opts:
+      parent: enp7s0
+    ipam:
+      config:
+        - subnet: "192.168.15.0/24"
+          ip_range: "192.168.15.1/32"
+          gateway: "192.168.15.1"
 
 #*##############################################################################
 #*                                SERVICES
@@ -34,7 +44,7 @@ services:
   # * ---------------------------------------------------------------------------
 
   loadbalancer:
-    image: nginx:1.26.2-alpine
+    image: nginx:1.28.0-alpine
     container_name: nginx
     volumes:
       - ./nginx/config:/etc/nginx
@@ -42,18 +52,18 @@ services:
       - ./logs/nginx:/var/log/nginx
       - ./certbot/www/:/var/www/certbot/
       - ./certbot/conf/:/etc/letsencrypt/
-    ports:
-      - 443:443
     networks:
-      - monitoring-net
-      - nginx-connection
+      nginx-connection:
+      monitoring-net:
+      vlan:
+        ipv4_address: 192.168.15.254
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          cpus: 2
-          memory: 128M
-    cpuset: 7-8
+          cpus: 4
+          memory: 512M
+    cpuset: 7-10
 
   # * ---------------------------------------------------------------------------
   # * CERTBOT
@@ -101,7 +111,7 @@ services:
   # * ---------------------------------------------------------------------------
 
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:12.0.0
     container_name: grafana
     expose:
       - 3008
@@ -112,8 +122,8 @@ services:
       GF_AUTH_GENERIC_OAUTH_ENABLED: true
       GF_AUTH_GENERIC_OAUTH_TLS_SKIP_VERIFY_INSECURE: true
       GF_AUTH_GENERIC_OAUTH_NAME: authentik
-      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: $${ GF_AUTH_GENERIC_OAUTH_CLIENT_ID }
-      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: $${ GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET }
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${GF_AUTH_GENERIC_OAUTH_CLIENT_ID}
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET}
       GF_AUTH_GENERIC_OAUTH_SCOPES: "openid profile email"
       GF_AUTH_GENERIC_OAUTH_AUTH_URL: https://authentik.nexuswebdigital.com/application/o/authorize/
       GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://authentikServer:9000/application/o/token/
@@ -160,7 +170,7 @@ services:
       resources:
         limits:
           cpus: 1
-          memory: 64M
+          memory: 128M
     cpuset: "17"
 
   # * ---------------------------------------------------------------------------
@@ -168,7 +178,7 @@ services:
   # * ---------------------------------------------------------------------------
 
   redis:
-    image: docker.io/library/redis:alpine
+    image: docker.io/library/redis:8.0.1-alpine
     container_name: redis
     command: --save 60 1 --loglevel warning
     restart: unless-stopped
@@ -186,7 +196,7 @@ services:
       resources:
         limits:
           cpus: 1
-          memory: 16M
+          memory: 128M
     cpuset: "19"
 
   # * ---------------------------------------------------------------------------
@@ -194,7 +204,7 @@ services:
   # * ---------------------------------------------------------------------------
 
   authentikServer:
-    image: ghcr.io/goauthentik/server:2024.12.2
+    image: ghcr.io/goauthentik/server:2025.4.0
     container_name: authentikServer
     restart: unless-stopped
     command: server
@@ -224,12 +234,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: 1
+          cpus: 4
           memory: 1G
-    cpuset: "16"
+    cpuset: 15-19
 
   authentikWorker:
-    image: ghcr.io/goauthentik/server:2024.12.2
+    image: ghcr.io/goauthentik/server:2025.4.0
     container_name: authentikWorker
     restart: unless-stopped
     user: 65534:65534
@@ -256,16 +266,16 @@ services:
     deploy:
       resources:
         limits:
-          cpus: 1
+          cpus: 4
           memory: 1G
-    cpuset: "16"
+    cpuset: 15-19
 
   # * ---------------------------------------------------------------------------
   # *  Pihole
   # * ---------------------------------------------------------------------------
 
   dns:
-    image: pihole/pihole:nightly
+    image: pihole/pihole:2025.04.0
     container_name: pihole
     hostname: pihole
     ports:
@@ -278,7 +288,7 @@ services:
       PIHOLE_UID: 65534
       PIHOLE_GID: 65534
       tz: America/Sao_Paulo
-      FTLCONF_webserver_api_password: ${FTLCONF_webserver_api_password}
+      FTLCONF_webserver_api_password: ""
       FTLCONF_dns_listeningMode: "all"
     volumes:
       - ./pihole/etc-pihole:/etc/pihole
@@ -289,7 +299,7 @@ services:
       resources:
         limits:
           cpus: 1
-          memory: 256M
+          memory: 512M
     cpuset: "16"
 
   # * ---------------------------------------------------------------------------
@@ -297,7 +307,7 @@ services:
   # * ---------------------------------------------------------------------------
 
   loki:
-    image: grafana/loki:3.2.1
+    image: grafana/loki:3.5
     container_name: loki
     expose:
       - 3100
@@ -319,7 +329,7 @@ services:
   # * ---------------------------------------------------------------------------
 
   promtail:
-    image: grafana/promtail:3.2.1
+    image: grafana/promtail:3.5.0
     container_name: promtail
     volumes:
       - ./promtail/config:/etc/promtail
@@ -332,7 +342,7 @@ services:
       resources:
         limits:
           cpus: 1
-          memory: 32M
+          memory: 128M
     cpuset: "19"
 
   # * ---------------------------------------------------------------------------
@@ -340,7 +350,7 @@ services:
   # * ---------------------------------------------------------------------------
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
     container_name: cadvisor
     expose:
       - 8080
@@ -383,8 +393,169 @@ services:
       resources:
         limits:
           cpus: 1
-          memory: 16M
+          memory: 128M
     cpuset: "18"
+
+  # * ---------------------------------------------------------------------------
+  # * Jellyfin
+  # * ---------------------------------------------------------------------------
+
+  jellyfin:
+    image: jellyfin/jellyfin
+    container_name: jellyfin
+    hostname: jellyfin
+    user: 65534:65534
+    volumes:
+      - ./jellyfin/config:/config
+      - ./jellyfin/cache:/cache
+      - type: bind
+        source: ./jellyfin/media
+        target: /media
+      - type: bind
+        source: ./jellyfin/media2
+        target: /media2
+        read_only: true
+      - type: bind
+        source: ./jellyfin/fonts
+        target: /usr/local/share/fonts/custom
+        read_only: true
+    restart: "unless-stopped"
+    environment:
+      - JELLYFIN_PublishedServerUrl=https://stream.nexuswebdigital.com
+    networks:
+      - nginx-connection
+
+  # * ---------------------------------------------------------------------------
+  # * VS Code Web
+  # * ---------------------------------------------------------------------------
+
+  code-server:
+    image: lscr.io/linuxserver/code-server:latest
+    container_name: code
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "America/Sao_Paulo"
+      DEFAULT_WORKSPACE: "/config"
+      DOCKER_MODS: "linuxserver/mods:universal-docker"
+    volumes:
+      - /var/opt:/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    expose:
+      - 8443
+    networks:
+      - nginx-connection
+    deploy:
+      resources:
+        limits:
+          cpus: 4
+          memory: 512M
+    cpuset: 7-10
+
+  # * ---------------------------------------------------------------------------
+  # * Windows
+  # * ---------------------------------------------------------------------------
+
+  windows-foda:
+    image: dockurr/windows:4.35
+    container_name: windows
+    environment:
+      VERSION: "10"
+      CPU_CORES: "6"
+      RAM_SIZE: "4G"
+      USERNAME: ${WIN_USERNAME}
+      PASSWORD: ${WIN_PASSWORD}
+      LANGUAGE: "Portuguese"
+      REGION: "pt-BR"
+      KEYBOARD: "pt-BR"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    volumes:
+      - ./win/config:/oem
+    cap_add:
+      - NET_ADMIN
+    stop_grace_period: 2m
+    networks:
+      - nginx-connection
+    restart: unless-stopped
+    deploy:
+      resources:
+        # reservations:
+        #   devices:
+        #     - driver: nvidia
+        #       count: 1
+        #       capabilities: [gpu]
+        limits:
+          cpus: 6
+          memory: 4G
+    cpuset: 9-14
+
+  # * ---------------------------------------------------------------------------
+  # * Portainer
+  # * ---------------------------------------------------------------------------
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    volumes:
+      - portainer_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    expose:
+      - 9000
+    networks:
+      - nginx-connection
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 128M
+    cpuset: "15"
+
+  # * ---------------------------------------------------------------------------
+  # * Database
+  # * ---------------------------------------------------------------------------
+
+  # mongodb:
+  #   image: mongo:4.4.6
+  #   ports:
+  #     - 27017:27017
+  #   networks:
+  #     - chat-ui
+
+  # * ---------------------------------------------------------------------------
+  # * Ollama
+  # * ---------------------------------------------------------------------------
+
+  # ollama-service:
+  #   image: ollama/ollama
+  #   ports:
+  #     - 11434:11434
+  #   volumes:
+  #     - ./ollama:/root/.ollama
+  #   networks:
+  #     - chat-ui
+
+  # * ---------------------------------------------------------------------------
+  # * Chat-UI
+  # * ---------------------------------------------------------------------------
+
+  # chat-ui:
+  #   image: ghcr.io/huggingface/chat-ui-db:latest
+  #   volumes:
+  #     - ./db:/data
+  #     - .env.local:/app/.env.local
+  #   environment:
+  #     - MONGODB_URL=mongodb://mongodb:27017
+  #     - HF_TOKEN=abc
+  #   ports:
+  #     - 3000:3000
+  #   depends_on:
+  #     - mongodb
+  #   networks:
+  #     - chat-ui
 
   # * ---------------------------------------------------------------------------
   # * SR.Forg
@@ -432,116 +603,3 @@ services:
   #         cpus: 1
   #         memory: 256M
   #   cpuset: "2"
-
-  # * ---------------------------------------------------------------------------
-  # * Jellyfin
-  # * ---------------------------------------------------------------------------
-
-  jellyfin:
-    image: jellyfin/jellyfin
-    container_name: jellyfin
-    hostname: jellyfin
-    user: 65534:65534
-    volumes:
-      - ./jellyfin/config:/config
-      - ./jellyfin/cache:/cache
-      - type: bind
-        source: ./jellyfin/media
-        target: /media
-      - type: bind
-        source: ./jellyfin/media2
-        target: /media2
-        read_only: true
-      - type: bind
-        source: ./jellyfin/fonts
-        target: /usr/local/share/fonts/custom
-        read_only: true
-    restart: "unless-stopped"
-    environment:
-      - JELLYFIN_PublishedServerUrl=https://stream.nexuswebdigital.com
-    networks:
-      - nginx-connection
-
-  # * ---------------------------------------------------------------------------
-  # * Windows
-  # * ---------------------------------------------------------------------------
-
-  windows-foda:
-    image: dockurr/windows
-    container_name: windows
-    environment:
-      VERSION: "10"
-      CPU_CORES: "6"
-      RAM_SIZE: "4G"
-      USERNAME: ${WIN_USERNAME}
-      PASSWORD: ${WIN_PASSWORD}
-      LANGUAGE: "Portuguese"
-      REGION: "pt-BR"
-      KEYBOARD: "pt-BR"
-    devices:
-      - /dev/kvm
-      - /dev/net/tun
-    volumes:
-      - ./win/config:/oem
-    cap_add:
-      - NET_ADMIN
-    stop_grace_period: 2m
-    ports:
-      - 3389:3389
-    networks:
-      - nginx-connection
-    restart: unless-stopped
-    deploy:
-      resources:
-        # reservations:
-        #   devices:
-        #     - driver: nvidia
-        #       count: 1
-        #       capabilities: [gpu]
-        limits:
-          cpus: 6
-          memory: 4G
-    cpuset: 9-14
-
-  # * ---------------------------------------------------------------------------
-  # * Database
-  # * ---------------------------------------------------------------------------
-
-  # mongodb:
-  #   image: mongo:4.4.6
-  #   ports:
-  #     - 27017:27017
-  #   networks:
-  #     - chat-ui
-
-  # * ---------------------------------------------------------------------------
-  # * Ollama
-  # * ---------------------------------------------------------------------------
-
-  # ollama-service:
-  #   image: ollama/ollama
-  #   ports:
-  #     - 11434:11434
-  #   volumes:
-  #     - ./ollama:/root/.ollama
-  #   networks:
-  #     - chat-ui
-
-  # * ---------------------------------------------------------------------------
-  # * Chat-UI
-  # * ---------------------------------------------------------------------------
-
-  # chat-ui:
-  #   image: ghcr.io/huggingface/chat-ui-db:latest
-  #   volumes:
-  #     - ./db:/data
-  #     - .env.local:/app/.env.local
-  #   environment:
-  #     - MONGODB_URL=mongodb://mongodb:27017
-  #     - HF_TOKEN=abc
-  #   ports:
-  #     - 3000:3000
-  #   depends_on:
-  #     - mongodb
-  #   networks:
-  #     - chat-ui
