@@ -10,6 +10,9 @@ volumes:
   loki-config:
   postgres-data:
   portainer_data:
+  nextcloud-data:
+  ollama-data: {}
+  open-webui-data: {}
 
 #*##############################################################################
 #*                               NETWORKS
@@ -22,7 +25,7 @@ networks:
     external: true
   monitoring-net:
     external: true
-  chat-ui:
+  ai-net:
     external: true
   vlan:
     driver: macvlan
@@ -31,11 +34,11 @@ networks:
     ipam:
       config:
         - subnet: "192.168.15.0/24"
-          ip_range: "192.168.15.1/32"
           gateway: "192.168.15.1"
+          ip_range: "192.168.15.192/27"
 
 #*##############################################################################
-#*                                SERVICES
+#*                                SERVICES8
 #*##############################################################################
 
 services:
@@ -52,6 +55,7 @@ services:
       - ./logs/nginx:/var/log/nginx
       - ./certbot/www/:/var/www/certbot/
       - ./certbot/conf/:/etc/letsencrypt/
+      - ../projetos/static_sites/:/usr/share/nginx/html
     networks:
       nginx-connection:
       monitoring-net:
@@ -62,8 +66,38 @@ services:
       resources:
         limits:
           cpus: 4
-          memory: 512M
-    cpuset: 7-10
+          memory: 1G
+    cpuset: 12-15
+
+  # * ---------------------------------------------------------------------------
+  # * SSH
+  # * ---------------------------------------------------------------------------
+
+  openssh-server:
+    image: linuxserver/openssh-server
+    container_name: openssh-server
+    restart: unless-stopped
+    hostname: openssh-server
+    ports:
+      - 1080:2222
+    environment:
+      # https://github.com/linuxserver/docker-mods/tree/openssh-server-ssh-tunnel
+      - DOCKER_MODS=linuxserver/mods:openssh-server-ssh-tunnel
+      - SHELL_NOLOGIN=false
+      # set correct for current host user
+      - PUID=1001
+      - PGID=1001
+      - TZ=Etc/UTC
+      # important
+      - PUBLIC_KEY
+      # optional env vars bellow
+      - SUDO_ACCESS=true
+      - USER_NAME=username
+      - PASSWORD_ACCESS=false
+    volumes:
+      - ./config:/config
+    networks:
+      - nginx-connection
 
   # * ---------------------------------------------------------------------------
   # * CERTBOT
@@ -153,17 +187,18 @@ services:
     container_name: globalDatabase
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -d authentik -U $${POSTGRES_USER}"]
       start_period: 20s
       interval: 30s
       retries: 5
       timeout: 5s
     volumes:
+      - ./postgres/init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh
       - globalDatabase-data:/var/lib/postgresql/data
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_MULTIPLE_DATABASES: authentik, nextcloud
     networks:
       - database-net
     deploy:
@@ -213,7 +248,7 @@ services:
       AUTHENTIK_REDIS__HOST: redis
       AUTHENTIK_POSTGRESQL__HOST: globalDatabase
       AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
-      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
+      AUTHENTIK_POSTGRESQL__NAME: authentik
       AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
       AUTHENTIK_ERROR_REPORTING__ENABLED: true
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
@@ -236,7 +271,7 @@ services:
         limits:
           cpus: 4
           memory: 1G
-    cpuset: 15-19
+    cpuset: 16-19
 
   authentikWorker:
     image: ghcr.io/goauthentik/server:2025.4.0
@@ -248,7 +283,7 @@ services:
       AUTHENTIK_REDIS__HOST: redis
       AUTHENTIK_POSTGRESQL__HOST: globalDatabase
       AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
-      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
+      AUTHENTIK_POSTGRESQL__NAME: authentik
       AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
     volumes:
@@ -268,7 +303,7 @@ services:
         limits:
           cpus: 4
           memory: 1G
-    cpuset: 15-19
+    cpuset: 16-19
 
   # * ---------------------------------------------------------------------------
   # *  Pihole
@@ -420,10 +455,14 @@ services:
         target: /usr/local/share/fonts/custom
         read_only: true
     restart: "unless-stopped"
+    ports:
+      - 8096:8096
     environment:
       - JELLYFIN_PublishedServerUrl=https://stream.nexuswebdigital.com
     networks:
-      - nginx-connection
+      nginx-connection:
+      vlan:
+        ipv4_address: 192.168.15.253
 
   # * ---------------------------------------------------------------------------
   # * VS Code Web
@@ -450,8 +489,8 @@ services:
       resources:
         limits:
           cpus: 4
-          memory: 512M
-    cpuset: 7-10
+          memory: 1G
+    cpuset: 12-15
 
   # * ---------------------------------------------------------------------------
   # * Windows
@@ -462,8 +501,8 @@ services:
     container_name: windows
     environment:
       VERSION: "10"
-      CPU_CORES: "6"
-      RAM_SIZE: "4G"
+      CPU_CORES: "10"
+      RAM_SIZE: "16G"
       USERNAME: ${WIN_USERNAME}
       PASSWORD: ${WIN_PASSWORD}
       LANGUAGE: "Portuguese"
@@ -488,9 +527,9 @@ services:
         #       count: 1
         #       capabilities: [gpu]
         limits:
-          cpus: 6
-          memory: 4G
-    cpuset: 9-14
+          cpus: 10
+          memory: 16G
+    cpuset: 6-15
 
   # * ---------------------------------------------------------------------------
   # * Portainer
@@ -510,52 +549,84 @@ services:
     deploy:
       resources:
         limits:
-          cpus: 1
+          cpus: 4
           memory: 128M
+    cpuset: 16-19
+
+  # * ---------------------------------------------------------------------------
+  # * Nextcloud
+  # * ---------------------------------------------------------------------------
+
+  nextcloud:
+    image: nextcloud:30.0.11-apache
+    container_name: nextcloud
+    restart: unless-stopped
+    expose:
+      - 80
+    depends_on:
+      - globalDatabase
+    environment:
+      - POSTGRES_HOST=globalDatabase
+      - POSTGRES_DB=nextcloud
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - nextcloud-data:/var/www/html
+    networks:
+      - nginx-connection
+      - database-net
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 512M
     cpuset: "15"
-
-  # * ---------------------------------------------------------------------------
-  # * Database
-  # * ---------------------------------------------------------------------------
-
-  # mongodb:
-  #   image: mongo:4.4.6
-  #   ports:
-  #     - 27017:27017
-  #   networks:
-  #     - chat-ui
 
   # * ---------------------------------------------------------------------------
   # * Ollama
   # * ---------------------------------------------------------------------------
 
-  # ollama-service:
-  #   image: ollama/ollama
-  #   ports:
-  #     - 11434:11434
-  #   volumes:
-  #     - ./ollama:/root/.ollama
-  #   networks:
-  #     - chat-ui
+  ollama-service:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    expose:
+      - 11434
+    volumes:
+      - ollama-data:/root/.ollama
+    tty: true
+    networks:
+      - ai-net
+    deploy:
+      resources:
+        limits:
+          cpus: 6
+    cpuset: 6-11
 
   # * ---------------------------------------------------------------------------
   # * Chat-UI
   # * ---------------------------------------------------------------------------
 
-  # chat-ui:
-  #   image: ghcr.io/huggingface/chat-ui-db:latest
-  #   volumes:
-  #     - ./db:/data
-  #     - .env.local:/app/.env.local
-  #   environment:
-  #     - MONGODB_URL=mongodb://mongodb:27017
-  #     - HF_TOKEN=abc
-  #   ports:
-  #     - 3000:3000
-  #   depends_on:
-  #     - mongodb
-  #   networks:
-  #     - chat-ui
+  chat-ui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: openchat
+    restart: unless-stopped
+    volumes:
+      - open-webui-data:/app/backend/data
+    environment:
+      - "OLLAMA_BASE_URL=http://ollama:11434"
+      - "WEBUI_SECRET_KEY=dhqK8hVFgXEVl91uHD2uAa1Wmok3B"
+    expose:
+      - 8080
+    networks:
+      - ai-net
+      - nginx-connection
+    deploy:
+      resources:
+        limits:
+          cpus: 4
+          memory: 2G
+    cpuset: 12-15
 
   # * ---------------------------------------------------------------------------
   # * SR.Forg

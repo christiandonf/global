@@ -2,7 +2,7 @@
 # Renova certificados SSL expirados
 echo "Iniciando renovação de certificados..."
 
-COMPOSER_FILE="/var/opt/global/docker-compose.yml"
+COMPOSER_FILE="/var/opt/workspace/global/docker-compose.yml"
 
 docker compose -f "$COMPOSER_FILE" run --rm sslbot renew
 

@@ -2,7 +2,7 @@
 # Gera novos certificados SSL com desafio DNS
 DOMAINS=(-d nexuswebdigital.com -d *.nexuswebdigital.com)
 EMAIL="markin-work@gmail.com"
-COMPOSER_FILE="/var/opt/global/docker-compose.yml"
+COMPOSER_FILE="/var/opt/workspace/global/docker-compose.yml"
 docker compose -f "$COMPOSER_FILE" run --rm sslbot certonly \
   --manual \
   --preferred-challenges dns \
