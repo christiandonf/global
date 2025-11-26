@@ -27,15 +27,6 @@ networks:
     external: true
   ai-net:
     external: true
-  vlan:
-    driver: macvlan
-    driver_opts:
-      parent: enp7s0
-    ipam:
-      config:
-        - subnet: "192.168.15.0/24"
-          gateway: "192.168.15.1"
-          ip_range: "192.168.15.192/27"
 
 #*##############################################################################
 #*                                SERVICES8
@@ -49,6 +40,16 @@ services:
   loadbalancer:
     image: nginx:1.28.0-alpine
     container_name: nginx
+    ports:
+      - 80:80
+      - 443:443
+      - 7777:7777
+      - 24454:24454
+      - 25565:25565
+      - 25566:25566
+      - 25567:25567
+      - 25568:25568
+      - 25570:25570
     volumes:
       - ./nginx/config:/etc/nginx
       - ./nginx/others/geoip:/etc/nginx/others
@@ -57,10 +58,8 @@ services:
       - ./certbot/conf/:/etc/letsencrypt/
       - ../projetos/static_sites/:/usr/share/nginx/html
     networks:
-      nginx-connection:
-      monitoring-net:
-      vlan:
-        ipv4_address: 192.168.15.254
+      - nginx-connection
+      - monitoring-net
     restart: unless-stopped
     deploy:
       resources:
@@ -68,36 +67,6 @@ services:
           cpus: 4
           memory: 1G
     cpuset: 12-15
-
-  # * ---------------------------------------------------------------------------
-  # * SSH
-  # * ---------------------------------------------------------------------------
-
-  openssh-server:
-    image: linuxserver/openssh-server
-    container_name: openssh-server
-    restart: unless-stopped
-    hostname: openssh-server
-    ports:
-      - 1080:2222
-    environment:
-      # https://github.com/linuxserver/docker-mods/tree/openssh-server-ssh-tunnel
-      - DOCKER_MODS=linuxserver/mods:openssh-server-ssh-tunnel
-      - SHELL_NOLOGIN=false
-      # set correct for current host user
-      - PUID=1001
-      - PGID=1001
-      - TZ=Etc/UTC
-      # important
-      - PUBLIC_KEY
-      # optional env vars bellow
-      - SUDO_ACCESS=true
-      - USER_NAME=username
-      - PASSWORD_ACCESS=false
-    volumes:
-      - ./config:/config
-    networks:
-      - nginx-connection
 
   # * ---------------------------------------------------------------------------
   # * CERTBOT
@@ -306,38 +275,6 @@ services:
     cpuset: 16-19
 
   # * ---------------------------------------------------------------------------
-  # *  Pihole
-  # * ---------------------------------------------------------------------------
-
-  dns:
-    image: pihole/pihole:2025.04.0
-    container_name: pihole
-    hostname: pihole
-    ports:
-      - 53:53/udp
-      - 53:53/tcp
-    expose:
-      - "80"
-    restart: unless-stopped
-    environment:
-      PIHOLE_UID: 65534
-      PIHOLE_GID: 65534
-      tz: America/Sao_Paulo
-      FTLCONF_webserver_api_password: ""
-      FTLCONF_dns_listeningMode: "all"
-    volumes:
-      - ./pihole/etc-pihole:/etc/pihole
-      - ./pihole/etc-dnsmasq.d:/etc/dnsmasq.d
-    networks:
-      - nginx-connection
-    deploy:
-      resources:
-        limits:
-          cpus: 1
-          memory: 512M
-    cpuset: "16"
-
-  # * ---------------------------------------------------------------------------
   # *  Loki
   # * ---------------------------------------------------------------------------
 
@@ -457,12 +394,12 @@ services:
     restart: "unless-stopped"
     ports:
       - 8096:8096
+    # expose:
+    #   - 8096
     environment:
       - JELLYFIN_PublishedServerUrl=https://stream.nexuswebdigital.com
     networks:
-      nginx-connection:
-      vlan:
-        ipv4_address: 192.168.15.253
+      - nginx-connection
 
   # * ---------------------------------------------------------------------------
   # * VS Code Web
