@@ -4,11 +4,11 @@
 
 volumes:
   globalDatabase-data:
+  nextclouddatabase-data:
   redis-data:
   grafana-data:
   loki-data:
   loki-config:
-  postgres-data:
   portainer_data:
   nextcloud-data:
   ollama-data: {}
@@ -21,7 +21,9 @@ volumes:
 networks:
   nginx-connection:
     external: true
-  database-net:
+  authentik-net:
+    external: true
+  nextcloud-net:
     external: true
   monitoring-net:
     external: true
@@ -56,7 +58,7 @@ services:
       - ./logs/nginx:/var/log/nginx
       - ./certbot/www/:/var/www/certbot/
       - ./certbot/conf/:/etc/letsencrypt/
-      - ../projetos/static_sites/:/usr/share/nginx/html
+      - ../sites/static_sites/:/var/www/
     networks:
       - nginx-connection
       - monitoring-net
@@ -148,34 +150,91 @@ services:
     cpuset: "19"
 
   # * ---------------------------------------------------------------------------
-  # * Global Database
+  # * Authentik Database
   # * ---------------------------------------------------------------------------
 
-  globalDatabase:
+  authentikdatabase:
     image: docker.io/library/postgres:16-alpine
-    container_name: globalDatabase
+    container_name: authentikdatabase
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d authentik -U $${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -d authentik -U $${AUTHENTIK_USER}"]
       start_period: 20s
       interval: 30s
       retries: 5
       timeout: 5s
     volumes:
-      - ./postgres/init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh
       - globalDatabase-data:/var/lib/postgresql/data
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_MULTIPLE_DATABASES: authentik, nextcloud
+      POSTGRES_DB: authentik
+      POSTGRES_USER: ${AUTHENTIK_USER}
+      POSTGRES_PASSWORD: ${AUTHENTIK_PASSWORD}
     networks:
-      - database-net
+      - authentik-net
     deploy:
       resources:
         limits:
           cpus: 1
           memory: 128M
     cpuset: "17"
+
+  # * ---------------------------------------------------------------------------
+  # * Nextcloud Database
+  # * ---------------------------------------------------------------------------
+
+  nextclouddatabase:
+    image: docker.io/library/postgres:16-alpine
+    container_name: nextclouddatabase
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d nextcloud -U $${NEXTCLOUD_USER}"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    volumes:
+      - nextclouddatabase-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: ${NEXTCLOUD_USER}
+      POSTGRES_PASSWORD: ${NEXTCLOUD_PASSWORD}
+    networks:
+      - nextcloud-net
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 128M
+    cpuset: "17"
+
+  # * ---------------------------------------------------------------------------
+  # * Nextcloud
+  # * ---------------------------------------------------------------------------
+
+  nextcloud:
+    image: nextcloud:30.0.11-apache
+    container_name: nextcloud
+    restart: unless-stopped
+    expose:
+      - 80
+    depends_on:
+      - nextclouddatabase
+    environment:
+      - POSTGRES_HOST=nextclouddatabase
+      - POSTGRES_DB=nextcloud
+      - POSTGRES_USER=${NEXTCLOUD_USER}
+      - POSTGRES_PASSWORD=${NEXTCLOUD_PASSWORD}
+    volumes:
+      - nextcloud-data:/var/www/html
+    networks:
+      - nginx-connection
+      - nextcloud-net
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 512M
+    cpuset: "15"
 
   # * ---------------------------------------------------------------------------
   # * Redis
@@ -195,7 +254,7 @@ services:
     volumes:
       - redis-data:/data
     networks:
-      - database-net
+      - authentik-net
     deploy:
       resources:
         limits:
@@ -215,10 +274,10 @@ services:
     user: 65534:65534
     environment:
       AUTHENTIK_REDIS__HOST: redis
-      AUTHENTIK_POSTGRESQL__HOST: globalDatabase
-      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__HOST: authentikdatabase
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_USER}
       AUTHENTIK_POSTGRESQL__NAME: authentik
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PASSWORD}
       AUTHENTIK_ERROR_REPORTING__ENABLED: true
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
     expose:
@@ -229,9 +288,9 @@ services:
       - ./authentik/custom-templates:/templates
     networks:
       - nginx-connection
-      - database-net
+      - authentik-net
     depends_on:
-      globalDatabase:
+      authentikdatabase:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -250,10 +309,10 @@ services:
     command: worker
     environment:
       AUTHENTIK_REDIS__HOST: redis
-      AUTHENTIK_POSTGRESQL__HOST: globalDatabase
-      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__HOST: authentikdatabase
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_USER}
       AUTHENTIK_POSTGRESQL__NAME: authentik
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PASSWORD}
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -261,9 +320,9 @@ services:
       - ./authentik/certs:/certs
       - ./authentik/custom-templates:/templates
     networks:
-      - database-net
+      - authentik-net
     depends_on:
-      globalDatabase:
+      authentikdatabase:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -491,35 +550,6 @@ services:
     cpuset: 16-19
 
   # * ---------------------------------------------------------------------------
-  # * Nextcloud
-  # * ---------------------------------------------------------------------------
-
-  nextcloud:
-    image: nextcloud:30.0.11-apache
-    container_name: nextcloud
-    restart: unless-stopped
-    expose:
-      - 80
-    depends_on:
-      - globalDatabase
-    environment:
-      - POSTGRES_HOST=globalDatabase
-      - POSTGRES_DB=nextcloud
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - nextcloud-data:/var/www/html
-    networks:
-      - nginx-connection
-      - database-net
-    deploy:
-      resources:
-        limits:
-          cpus: 1
-          memory: 512M
-    cpuset: "15"
-
-  # * ---------------------------------------------------------------------------
   # * Ollama
   # * ---------------------------------------------------------------------------
 
@@ -551,8 +581,8 @@ services:
     volumes:
       - open-webui-data:/app/backend/data
     environment:
-      - "OLLAMA_BASE_URL=http://ollama:11434"
-      - "WEBUI_SECRET_KEY=dhqK8hVFgXEVl91uHD2uAa1Wmok3B"
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=${WEBUI_KEY}
     expose:
       - 8080
     networks:
@@ -604,7 +634,7 @@ services:
   #   restart: unless-stopped
   #   networks:
   #     - nginx_connection
-  #     - database-net
+  #     - authentik-net
   #   deploy:
   #     resources:
   #       limits:
