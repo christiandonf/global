@@ -5,14 +5,17 @@
 volumes:
   globalDatabase-data:
   nextclouddatabase-data:
+  immichdatabase-data:
   redis-data:
   grafana-data:
   loki-data:
   loki-config:
   portainer_data:
   nextcloud-data:
-  ollama-data: {}
-  open-webui-data: {}
+  searxng-data:
+  headscale:
+  immich:
+  model-cache:
 
 #*##############################################################################
 #*                               NETWORKS
@@ -25,9 +28,11 @@ networks:
     external: true
   nextcloud-net:
     external: true
+  immich-net:
+    external: true
   monitoring-net:
     external: true
-  ai-net:
+  redis-net:
     external: true
 
 #*##############################################################################
@@ -40,18 +45,18 @@ services:
   # * ---------------------------------------------------------------------------
 
   loadbalancer:
-    image: nginx:1.28.0-alpine
+    image: nginx:1.29.4-alpine
     container_name: nginx
     ports:
       - 80:80
       - 443:443
       - 7777:7777
-      - 24454:24454
       - 25565:25565
       - 25566:25566
       - 25567:25567
       - 25568:25568
       - 25570:25570
+      - 25564:25564
     volumes:
       - ./nginx/config:/etc/nginx
       - ./nginx/others/geoip:/etc/nginx/others
@@ -65,35 +70,262 @@ services:
     restart: unless-stopped
     deploy:
       resources:
-        limits:
-          cpus: 4
-          memory: 1G
-    cpuset: 12-15
+        reservations:
+          cpus: 2
+          memory: 256M
+    cpuset: 6-13
 
   # * ---------------------------------------------------------------------------
   # * CERTBOT
   # * ---------------------------------------------------------------------------
 
   sslbot:
-    image: certbot/certbot
+    image: certbot/certbot:latest
     container_name: certbot
     volumes:
       - ./certbot/www/:/var/www/certbot/
       - ./certbot/conf/:/etc/letsencrypt/
     deploy:
       resources:
-        limits:
+        reservations:
           cpus: 1
           memory: 32M
-    cpuset: "19"
+    cpuset: 18-19
+
+  # * ---------------------------------------------------------------------------
+  # * Authentik Database
+  # * ---------------------------------------------------------------------------
+
+  authentikdatabase:
+    image: docker.io/library/postgres:16-alpine
+    container_name: authentikdatabase
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d authentik -U authentikUser"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    volumes:
+      - globalDatabase-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: ${AUTHENTIK_USER}
+      POSTGRES_PASSWORD: ${AUTHENTIK_PASSWORD}
+    networks:
+      - authentik-net
+    deploy:
+      resources:
+        reservations:
+          cpus: 1
+          memory: 32M
+    cpuset: "14"
+
+  # * ---------------------------------------------------------------------------
+  # * Authentik
+  # * ---------------------------------------------------------------------------
+
+  authentikServer:
+    image: ghcr.io/goauthentik/server:2025.12.1
+    container_name: authentikServer
+    restart: unless-stopped
+    command: server
+    user: 65534:65534
+    environment:
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: authentikdatabase
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PASSWORD}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: true
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+    expose:
+      - 9000
+      - 9443
+    volumes:
+      - ./authentik/media:/media
+      - ./authentik/custom-templates:/templates
+    networks:
+      - nginx-connection
+      - authentik-net
+      - redis-net
+    depends_on:
+      authentikdatabase:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: 2
+          memory: 1G
+    cpuset: 6-13
+
+  authentikWorker:
+    image: ghcr.io/goauthentik/server:2025.12.1
+    container_name: authentikWorker
+    restart: unless-stopped
+    command: worker
+    user: 65534:65534
+    environment:
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: authentikdatabase
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PASSWORD}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./authentik/media:/media
+      - ./authentik/certs:/certs
+      - ./authentik/custom-templates:/templates
+    networks:
+      - authentik-net
+      - redis-net
+    depends_on:
+      authentikdatabase:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          cpus: 4
+          memory: 1G
+    cpuset: 6-13
+
+  # * ---------------------------------------------------------------------------
+  # * Nextcloud Database
+  # * ---------------------------------------------------------------------------
+
+  nextclouddatabase:
+    image: docker.io/library/postgres:16-alpine
+    container_name: nextclouddatabase
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d nextcloud -U nextcloudUser"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    volumes:
+      - nextclouddatabase-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: ${NEXTCLOUD_USER}
+      POSTGRES_PASSWORD: ${NEXTCLOUD_PASSWORD}
+    networks:
+      - nextcloud-net
+    deploy:
+      resources:
+        reservations:
+          cpus: 1
+          memory: 32M
+    cpuset: "15"
+
+  # * ---------------------------------------------------------------------------
+  # * Nextcloud
+  # * ---------------------------------------------------------------------------
+
+  nextcloud:
+    image: nextcloud:30.0.11-apache
+    container_name: nextcloud
+    restart: unless-stopped
+    expose:
+      - 80
+    depends_on:
+      - nextclouddatabase
+    environment:
+      - POSTGRES_HOST=nextclouddatabase
+      - POSTGRES_DB=nextcloud
+      - POSTGRES_USER=${NEXTCLOUD_USER}
+      - POSTGRES_PASSWORD=${NEXTCLOUD_PASSWORD}
+    volumes:
+      - nextcloud-data:/var/www/html
+    networks:
+      - nginx-connection
+      - nextcloud-net
+    deploy:
+      resources:
+        reservations:
+          cpus: 2
+          memory: 256M
+    cpuset: 6-13
+
+  # * ---------------------------------------------------------------------------
+  # * Immich Database
+  # * ---------------------------------------------------------------------------
+
+  immichdatabase:
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.3.0-pgvectors0.2.0
+    container_name: immichdatabase
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d immich -U immichUser"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    volumes:
+      - immichdatabase-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: immich
+      POSTGRES_USER: ${IMMICH_USER}
+      POSTGRES_PASSWORD: ${IMMICH_PASSWORD}
+    networks:
+      - immich-net
+    deploy:
+      resources:
+        reservations:
+          cpus: 1
+          memory: 32M
+    cpuset: "16"
+
+  # * ---------------------------------------------------------------------------
+  # * Immich
+  # * ---------------------------------------------------------------------------
+
+  # deploy:
+  #   resources:
+  #     limits:
+  #       cpus: 4
+  #       memory: 1G
+  # cpuset: 10-13
+
+  # * ---------------------------------------------------------------------------
+  # * Redis
+  # * ---------------------------------------------------------------------------
+
+  redis:
+    image: docker.io/library/redis:8.4.0-alpine
+    container_name: redis
+    command: --save 60 1 --loglevel warning
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+    volumes:
+      - redis-data:/data
+    networks:
+      - redis-net
+    deploy:
+      resources:
+        reservations:
+          cpus: 1
+          memory: 128M
+    cpuset: "17"
 
   # * ---------------------------------------------------------------------------
   # * PROMETHEUS
   # * ---------------------------------------------------------------------------
 
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:latest
     container_name: prometheus
+    restart: unless-stopped
     volumes:
       - "./prometheus:/etc/prometheus"
     expose:
@@ -105,18 +337,17 @@ services:
       - "host.docker.internal:host-gateway"
     deploy:
       resources:
-        limits:
-          cpus: 1
-          memory: 512M
-    cpuset: "18"
-    restart: unless-stopped
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    cpuset: 6-13
 
   # * ---------------------------------------------------------------------------
   # * GRAFANA
   # * ---------------------------------------------------------------------------
 
   grafana:
-    image: grafana/grafana:12.0.0
+    image: grafana/grafana:latest
     container_name: grafana
     expose:
       - 3008
@@ -144,264 +375,10 @@ services:
       - nginx-connection
     deploy:
       resources:
-        limits:
-          cpus: 1
-          memory: 512M
-    cpuset: "19"
-
-  # * ---------------------------------------------------------------------------
-  # * Authentik Database
-  # * ---------------------------------------------------------------------------
-
-  authentikdatabase:
-    image: docker.io/library/postgres:16-alpine
-    container_name: authentikdatabase
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d authentik -U $${AUTHENTIK_USER}"]
-      start_period: 20s
-      interval: 30s
-      retries: 5
-      timeout: 5s
-    volumes:
-      - globalDatabase-data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: authentik
-      POSTGRES_USER: ${AUTHENTIK_USER}
-      POSTGRES_PASSWORD: ${AUTHENTIK_PASSWORD}
-    networks:
-      - authentik-net
-    deploy:
-      resources:
-        limits:
-          cpus: 1
-          memory: 128M
-    cpuset: "17"
-
-  # * ---------------------------------------------------------------------------
-  # * Nextcloud Database
-  # * ---------------------------------------------------------------------------
-
-  nextclouddatabase:
-    image: docker.io/library/postgres:16-alpine
-    container_name: nextclouddatabase
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d nextcloud -U $${NEXTCLOUD_USER}"]
-      start_period: 20s
-      interval: 30s
-      retries: 5
-      timeout: 5s
-    volumes:
-      - nextclouddatabase-data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: nextcloud
-      POSTGRES_USER: ${NEXTCLOUD_USER}
-      POSTGRES_PASSWORD: ${NEXTCLOUD_PASSWORD}
-    networks:
-      - nextcloud-net
-    deploy:
-      resources:
-        limits:
-          cpus: 1
-          memory: 128M
-    cpuset: "17"
-
-  # * ---------------------------------------------------------------------------
-  # * Nextcloud
-  # * ---------------------------------------------------------------------------
-
-  nextcloud:
-    image: nextcloud:30.0.11-apache
-    container_name: nextcloud
-    restart: unless-stopped
-    expose:
-      - 80
-    depends_on:
-      - nextclouddatabase
-    environment:
-      - POSTGRES_HOST=nextclouddatabase
-      - POSTGRES_DB=nextcloud
-      - POSTGRES_USER=${NEXTCLOUD_USER}
-      - POSTGRES_PASSWORD=${NEXTCLOUD_PASSWORD}
-    volumes:
-      - nextcloud-data:/var/www/html
-    networks:
-      - nginx-connection
-      - nextcloud-net
-    deploy:
-      resources:
-        limits:
-          cpus: 1
-          memory: 512M
-    cpuset: "15"
-
-  # * ---------------------------------------------------------------------------
-  # * Redis
-  # * ---------------------------------------------------------------------------
-
-  redis:
-    image: docker.io/library/redis:8.0.1-alpine
-    container_name: redis
-    command: --save 60 1 --loglevel warning
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
-      start_period: 20s
-      interval: 30s
-      retries: 5
-      timeout: 3s
-    volumes:
-      - redis-data:/data
-    networks:
-      - authentik-net
-    deploy:
-      resources:
-        limits:
-          cpus: 1
-          memory: 128M
-    cpuset: "19"
-
-  # * ---------------------------------------------------------------------------
-  # * Authentik
-  # * ---------------------------------------------------------------------------
-
-  authentikServer:
-    image: ghcr.io/goauthentik/server:2025.4.0
-    container_name: authentikServer
-    restart: unless-stopped
-    command: server
-    user: 65534:65534
-    environment:
-      AUTHENTIK_REDIS__HOST: redis
-      AUTHENTIK_POSTGRESQL__HOST: authentikdatabase
-      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_USER}
-      AUTHENTIK_POSTGRESQL__NAME: authentik
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PASSWORD}
-      AUTHENTIK_ERROR_REPORTING__ENABLED: true
-      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
-    expose:
-      - 9000
-      - 9443
-    volumes:
-      - ./authentik/media:/media
-      - ./authentik/custom-templates:/templates
-    networks:
-      - nginx-connection
-      - authentik-net
-    depends_on:
-      authentikdatabase:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          cpus: 4
-          memory: 1G
-    cpuset: 16-19
-
-  authentikWorker:
-    image: ghcr.io/goauthentik/server:2025.4.0
-    container_name: authentikWorker
-    restart: unless-stopped
-    user: 65534:65534
-    command: worker
-    environment:
-      AUTHENTIK_REDIS__HOST: redis
-      AUTHENTIK_POSTGRESQL__HOST: authentikdatabase
-      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_USER}
-      AUTHENTIK_POSTGRESQL__NAME: authentik
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PASSWORD}
-      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./authentik/media:/media
-      - ./authentik/certs:/certs
-      - ./authentik/custom-templates:/templates
-    networks:
-      - authentik-net
-    depends_on:
-      authentikdatabase:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          cpus: 4
-          memory: 1G
-    cpuset: 16-19
-
-  # * ---------------------------------------------------------------------------
-  # *  Loki
-  # * ---------------------------------------------------------------------------
-
-  loki:
-    image: grafana/loki:3.5
-    container_name: loki
-    expose:
-      - 3100
-    volumes:
-      - loki-config:/etc/loki
-      - loki-data:/loki
-    networks:
-      - monitoring-net
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: 1
-          memory: 128M
-    cpuset: "18"
-
-  # * ---------------------------------------------------------------------------
-  # *  Promtail
-  # * ---------------------------------------------------------------------------
-
-  promtail:
-    image: grafana/promtail:3.5.0
-    container_name: promtail
-    volumes:
-      - ./promtail/config:/etc/promtail
-      - ./logs:/var/log
-    command: -config.file=/etc/promtail/config.yml
-    restart: unless-stopped
-    networks:
-      - monitoring-net
-    deploy:
-      resources:
-        limits:
-          cpus: 1
-          memory: 128M
-    cpuset: "19"
-
-  # * ---------------------------------------------------------------------------
-  # *  Cadvisor
-  # * ---------------------------------------------------------------------------
-
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.52.1
-    container_name: cadvisor
-    expose:
-      - 8080
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-    devices:
-      - /dev/kmsg
-    restart: unless-stopped
-    networks:
-      - monitoring-net
-    deploy:
-      resources:
-        limits:
-          cpus: 1
+        reservations:
+          cpus: "0.25"
           memory: 256M
-    cpuset: "15"
+    cpuset: 6-13
 
   # * ---------------------------------------------------------------------------
   # *  node-exporter
@@ -422,20 +399,19 @@ services:
       - monitoring-net
     deploy:
       resources:
-        limits:
-          cpus: 1
-          memory: 128M
-    cpuset: "18"
+        reservations:
+          cpus: "0.25"
+          memory: 32M
+    cpuset: 18-19
 
   # * ---------------------------------------------------------------------------
   # * Jellyfin
   # * ---------------------------------------------------------------------------
 
   jellyfin:
-    image: jellyfin/jellyfin
+    image: jellyfin/jellyfin:latest
     container_name: jellyfin
     hostname: jellyfin
-    user: 65534:65534
     volumes:
       - ./jellyfin/config:/config
       - ./jellyfin/cache:/cache
@@ -451,54 +427,32 @@ services:
         target: /usr/local/share/fonts/custom
         read_only: true
     restart: "unless-stopped"
-    ports:
-      - 8096:8096
-    # expose:
-    #   - 8096
+    # ports:
+    #   - 8096:8096
+    expose:
+      - 8096
     environment:
       - JELLYFIN_PublishedServerUrl=https://stream.nexuswebdigital.com
     networks:
       - nginx-connection
-
-  # * ---------------------------------------------------------------------------
-  # * VS Code Web
-  # * ---------------------------------------------------------------------------
-
-  code-server:
-    image: lscr.io/linuxserver/code-server:latest
-    container_name: code
-    environment:
-      PUID: "1000"
-      PGID: "1000"
-      TZ: "America/Sao_Paulo"
-      DEFAULT_WORKSPACE: "/config"
-      DOCKER_MODS: "linuxserver/mods:universal-docker"
-    volumes:
-      - /var/opt:/config
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    restart: unless-stopped
-    expose:
-      - 8443
-    networks:
-      - nginx-connection
     deploy:
       resources:
-        limits:
-          cpus: 4
-          memory: 1G
-    cpuset: 12-15
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    cpuset: 6-13
 
   # * ---------------------------------------------------------------------------
   # * Windows
   # * ---------------------------------------------------------------------------
 
   windows-foda:
-    image: dockurr/windows:4.35
+    image: dockurr/windows:latest
     container_name: windows
     environment:
       VERSION: "10"
-      CPU_CORES: "10"
-      RAM_SIZE: "16G"
+      CPU_CORES: "4"
+      RAM_SIZE: "4G"
       USERNAME: ${WIN_USERNAME}
       PASSWORD: ${WIN_PASSWORD}
       LANGUAGE: "Portuguese"
@@ -522,10 +476,10 @@ services:
         #     - driver: nvidia
         #       count: 1
         #       capabilities: [gpu]
-        limits:
-          cpus: 10
-          memory: 16G
-    cpuset: 6-15
+        reservations:
+          cpus: 2
+          memory: 2G
+    cpuset: 6-13
 
   # * ---------------------------------------------------------------------------
   # * Portainer
@@ -544,56 +498,158 @@ services:
       - nginx-connection
     deploy:
       resources:
-        limits:
-          cpus: 4
-          memory: 128M
-    cpuset: 16-19
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    cpuset: 6-13
 
   # * ---------------------------------------------------------------------------
-  # * Ollama
+  # * Searxng
   # * ---------------------------------------------------------------------------
 
-  ollama-service:
-    image: ollama/ollama:latest
-    container_name: ollama
+  searchengine:
+    image: docker.io/searxng/searxng:latest
+    container_name: searxng
     restart: unless-stopped
-    expose:
-      - 11434
+    environment:
+      - SEARXNG_BASE_URL=https://${SEARXNG_HOSTNAME:-localhost}/
     volumes:
-      - ollama-data:/root/.ollama
-    tty: true
+      - ./searxng:/etc/searxng:rw
+      - searxng-data:/var/cache/searxng:rw
     networks:
-      - ai-net
+      - nginx-connection
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
     deploy:
       resources:
-        limits:
-          cpus: 6
-    cpuset: 6-11
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    cpuset: 6-13
 
   # * ---------------------------------------------------------------------------
-  # * Chat-UI
+  # * Headscale
   # * ---------------------------------------------------------------------------
 
-  chat-ui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: openchat
+  VPN:
+    image: headscale/headscale:latest
+    container_name: headscale
+    command: serve
     restart: unless-stopped
     volumes:
-      - open-webui-data:/app/backend/data
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - WEBUI_SECRET_KEY=${WEBUI_KEY}
-    expose:
-      - 8080
+      - headscale:/var/lib/headscale
+      - ./headscale/config.yaml:/etc/headscale/config.yaml
     networks:
-      - ai-net
       - nginx-connection
     deploy:
       resources:
-        limits:
-          cpus: 4
-          memory: 2G
-    cpuset: 12-15
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    cpuset: 6-13
+
+  # * ---------------------------------------------------------------------------
+  # *  Loki
+  # * ---------------------------------------------------------------------------
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    expose:
+      - 3100
+    volumes:
+      - loki-config:/etc/loki
+      - loki-data:/loki
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          cpus: "0.25"
+          memory: 32M
+    cpuset: 18-19
+
+  # * ---------------------------------------------------------------------------
+  # *  Promtail
+  # * ---------------------------------------------------------------------------
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    volumes:
+      - ./promtail/config:/etc/promtail
+      - ./logs:/var/log
+    command: -config.file=/etc/promtail/config.yml
+    restart: unless-stopped
+    networks:
+      - monitoring-net
+    deploy:
+      resources:
+        reservations:
+          cpus: "0.25"
+          memory: 32M
+    cpuset: 18-19
+
+  # * ---------------------------------------------------------------------------
+  # *  Cadvisor
+  # * ---------------------------------------------------------------------------
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    restart: unless-stopped
+    expose:
+      - 8080
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    networks:
+      - monitoring-net
+    deploy:
+      resources:
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    cpuset: 18-19
+
+  # * ---------------------------------------------------------------------------
+  # *  Watchtower
+  # * ---------------------------------------------------------------------------
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_CLEANUP: true
+      WATCHTOWER_POLL_INTERVAL: 3600
+      WATCHTOWER_LABEL_ENABLE: true
+      WATCHTOWER_DEBUG: true
+      WATCHTOWER_NOTIFICATIONS: email
+      WATCHTOWER_NOTIFICATION_EMAIL_FROM: refinerymachine@gmail.com
+      WATCHTOWER_NOTIFICATION_EMAIL_TO: christian.nascimento.falcao@gmail.com
+      WATCHTOWER_NOTIFICATION_EMAIL_SERVER: smtp.gmail.com
+      WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PORT: 587
+      WATCHTOWER_NOTIFICATION_EMAIL_USERNAME: refinerymachine@gmail.com
+      WATCHTOWER_NOTIFICATION_EMAIL_PASSWORD: ${SENHA}
+      WATCHTOWER_NOTIFICATION_EMAIL_DELAY: 30
+    deploy:
+      resources:
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    cpuset: 18-19
 
   # * ---------------------------------------------------------------------------
   # * SR.Forg
@@ -601,43 +657,13 @@ services:
 
   # discordbot:
   #   container_name: srforg
-  #   user: 65534:65534
   #   build:
   #     context: ./srforg
   #     dockerfile: dockerfile
   #   restart: unless-stopped
   #   deploy:
   #     resources:
-  #       limits:
+  #       reservations:
   #         cpus: 1
   #         memory: 32M
-  #   cpuset: "2"
-
-  # * ---------------------------------------------------------------------------
-  # * Filetransfer
-  # * ---------------------------------------------------------------------------
-
-  # falsetorrent:
-  #   container_name: filetransfer
-  #   user: 65534:65534
-  #   build:
-  #     context: ./filetransfer
-  #     dockerfile: dockerfile
-  #   environment:
-  #     DATABASE_HOST:
-  #     DATABASE_USER:
-  #     DATABASE_PASSWORD:
-  #     DATABASE_NAME:
-  #     DATABASE_PORT:
-  #   expose:
-  #     - 3000
-  #   restart: unless-stopped
-  #   networks:
-  #     - nginx_connection
-  #     - authentik-net
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         cpus: 1
-  #         memory: 256M
-  #   cpuset: "2"
+  #   cpuset: 6-13
