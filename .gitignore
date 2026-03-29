@@ -1,9 +1,8 @@
 .env
-/promtail/
 /prometheus/
+/promtail/
 /pihole/
-/nginx/others/
-/nginx/config/others
+/nginx/
 /loki/
 /logs/
 /config/
@@ -11,3 +10,7 @@
 /authentik/
 /jellyfin/
 /win/
+/code/
+/nextcloud/
+/headscale/
+/searxng/
