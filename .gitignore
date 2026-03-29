@@ -2,7 +2,6 @@
 /prometheus/
 /promtail/
 /pihole/
-/nginx/
 /loki/
 /logs/
 /config/
